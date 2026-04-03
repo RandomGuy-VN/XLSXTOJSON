@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XLSX → JSON Uploader</title>
+<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #1a1a2e; color: #e0e0e0;
+    min-height: 100vh; padding: 2rem;
+  }
+  h1 { text-align: center; color: #a78bfa; margin-bottom: 1.5rem; }
+  .container { max-width: 900px; margin: 0 auto; }
+  label { display: block; font-size: 0.85rem; color: #aaa; margin-bottom: 0.3rem; }
+  input[type="text"] {
+    width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #333;
+    border-radius: 6px; background: #16213e; color: #e0e0e0;
+    font-size: 0.95rem; margin-bottom: 1rem;
+  }
+  .drop-zone {
+    border: 2px dashed #444; border-radius: 10px; padding: 2.5rem;
+    text-align: center; cursor: pointer; transition: border-color 0.2s;
+    margin-bottom: 1.5rem;
+  }
+  .drop-zone.hover { border-color: #a78bfa; }
+  .drop-zone input { display: none; }
+  .drop-zone p { color: #888; }
+  .drop-zone .filename { color: #a78bfa; font-weight: 600; margin-top: 0.5rem; }
+  table {
+    width: 100%; border-collapse: collapse; margin-bottom: 1.5rem;
+    font-size: 0.85rem;
+  }
+  th { background: #16213e; color: #a78bfa; padding: 0.5rem; text-align: left; border-bottom: 2px solid #333; }
+  td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #2a2a3e; }
+  tr:hover td { background: #1f2940; }
+  .actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+  button {
+    padding: 0.6rem 1.5rem; border: none; border-radius: 6px;
+    font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: background 0.2s;
+  }
+  #uploadBtn { background: #7c3aed; color: #fff; }
+  #uploadBtn:hover { background: #6d28d9; }
+  #uploadBtn:disabled { background: #444; cursor: not-allowed; }
+  #copyBtn, #exampleBtn { background: #16213e; color: #a78bfa; border: 1px solid #a78bfa; }
+  .output {
+    margin-top: 1rem; padding: 0.75rem; background: #0f0f23;
+    border-radius: 6px; word-break: break-all; font-family: monospace;
+    font-size: 0.85rem; display: none;
+  }
+  .output a { color: #7dd3fc; }
+  .status { font-size: 0.85rem; color: #aaa; }
+  .status.error { color: #f87171; }
+  .status.success { color: #4ade80; }
+  #preview { max-height: 400px; overflow: auto; margin-bottom: 1.5rem; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>XLSX → JSON Uploader</h1>
+
+  <label for="pasteId">Existing Paste ID (leave blank to create new)</label>
+  <input type="text" id="pasteId" placeholder="e.g. yPBlSxGt" />
+
+  <div style="margin-bottom: 1rem;">
+    <button id="exampleBtn">Download Example XLSX</button>
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <p>Drag & drop an XLSX file here, or click to browse</p>
+    <div class="filename" id="fileLabel"></div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" />
+  </div>
+
+  <div id="preview"></div>
+
+  <div class="actions">
+    <button id="uploadBtn" disabled>Upload JSON</button>
+    <button id="copyBtn" style="display:none">Copy URL</button>
+    <span class="status" id="status"></span>
+  </div>
+
+  <div class="output" id="output"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const PASTEFY_KEY = 'MeH4h2149MbzswYtETcQQd8w8WUlc3gBTvbxvxQh7TOcJwv7CarXnIyKAhBV';
+let jsonData = null;
+
+// Persist paste ID
+const pasteEl = $('pasteId');
+pasteEl.value = localStorage.getItem('xlsxtojson_pasteId') || '';
+pasteEl.addEventListener('input', () => localStorage.setItem('xlsxtojson_pasteId', pasteEl.value));
+
+// Download example XLSX
+$('exampleBtn').addEventListener('click', () => {
+  const data = [
+    { Name: 'Example Song', URL: 'https://example.com/song.lua', Playlist: 'My Playlist', Artist: 'Artist Name', BPM: 120 },
+    { Name: 'Another Song', URL: 'https://example.com/song2.lua', Playlist: 'Chill', Artist: 'Someone', BPM: 90 },
+  ];
+  const ws = XLSX.utils.json_to_sheet(data, { header: ['Name', 'URL', 'Playlist', 'Artist', 'BPM'] });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Songs');
+  XLSX.writeFile(wb, 'songs_example.xlsx');
+});
+
+// Drop zone
+const dropZone = $('dropZone');
+const fileInput = $('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('hover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('hover');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
+
+function handleFile(file) {
+  $('fileLabel').textContent = file.name;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      const expected = ['Name', 'URL', 'Playlist', 'Artist', 'BPM'];
+
+      jsonData = rows.map(r => {
+        const obj = {};
+        Object.keys(r).forEach(k => {
+          if (expected.includes(k)) obj[k] = k === 'BPM' ? Number(r[k]) || 0 : String(r[k] || '');
+        });
+        return obj;
+      });
+
+      let html = '<table><tr>' + expected.map(h => `<th>${h}</th>`).join('') + '</tr>';
+      jsonData.forEach(row => {
+        html += '<tr>' + expected.map(k => `<td>${row[k]}</td>`).join('') + '</tr>';
+      });
+      html += '</table>';
+      $('preview').innerHTML = html;
+      $('uploadBtn').disabled = false;
+      setStatus(`Parsed ${jsonData.length} songs`, 'success');
+    } catch (err) {
+      setStatus('Parse error: ' + err.message, 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function setStatus(msg, type) {
+  const s = $('status');
+  s.textContent = msg;
+  s.className = 'status' + (type ? ' ' + type : '');
+}
+
+// Upload to Pastefy
+$('uploadBtn').addEventListener('click', async () => {
+  if (!jsonData) return setStatus('No data to upload', 'error');
+
+  const pasteId = $('pasteId').value.trim();
+  const jsonStr = JSON.stringify(jsonData);
+
+  $('uploadBtn').disabled = true;
+  setStatus('Uploading...', '');
+
+  try {
+    let rawUrl;
+
+    if (pasteId) {
+      // Update existing paste
+      const res = await fetch(`https://pastefy.app/api/v2/paste/${pasteId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${PASTEFY_KEY}`
+        },
+        body: JSON.stringify({ content: jsonStr, title: 'songs.json' })
+      });
+      if (!res.ok) throw new Error(`Pastefy ${res.status}: ${await res.text()}`);
+      rawUrl = `https://pastefy.app/${pasteId}/raw`;
+      showResult(rawUrl, true);
+    } else {
+      // Create new paste
+      const res = await fetch('https://pastefy.app/api/v2/paste', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${PASTEFY_KEY}`
+        },
+        body: JSON.stringify({ content: jsonStr, title: 'songs.json' })
+      });
+      if (!res.ok) throw new Error(`Pastefy ${res.status}: ${await res.text()}`);
+      const data = await res.json();
+      const newId = data.paste.id;
+
+      $('pasteId').value = newId;
+      localStorage.setItem('xlsxtojson_pasteId', newId);
+      rawUrl = `https://pastefy.app/${newId}/raw`;
+      showResult(rawUrl, false);
+    }
+  } catch (err) {
+    setStatus('Upload failed: ' + err.message, 'error');
+  } finally {
+    $('uploadBtn').disabled = false;
+  }
+});
+
+function showResult(url, isUpdate) {
+  $('output').style.display = 'block';
+  $('output').innerHTML = `<a href="${url}" target="_blank">${url}</a>`;
+  $('copyBtn').style.display = '';
+  $('copyBtn').onclick = () => { navigator.clipboard.writeText(url); setStatus('Copied!', 'success'); };
+  setStatus(isUpdate ? 'Paste updated!' : 'Paste created!', 'success');
+}
+</script>
+</body>
+</html>
