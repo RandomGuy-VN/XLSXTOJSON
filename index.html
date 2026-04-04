@@ -55,6 +55,22 @@
   .status.error { color: #f87171; }
   .status.success { color: #4ade80; }
   #preview { max-height: 400px; overflow: auto; margin-bottom: 1.5rem; }
+  textarea {
+    width: 100%; padding: 0.75rem; border: 1px solid #333;
+    border-radius: 6px; background: #16213e; color: #e0e0e0;
+    font-family: 'Consolas', monospace; font-size: 0.85rem;
+    resize: vertical; margin-bottom: 0.5rem;
+  }
+  #extractResult {
+    padding: 0.75rem; background: #0f0f23; border-radius: 6px;
+    font-family: monospace; font-size: 0.9rem;
+  }
+  #extractResult .field { margin-bottom: 0.5rem; }
+  #extractResult .label { color: #a78bfa; font-weight: 600; }
+  #extractResult .value { color: #7dd3fc; word-break: break-all; }
+  #extractBtn { background: #7c3aed; color: #fff; }
+  #extractBtn:hover { background: #6d28d9; }
+  #copyBpmBtn, #copyUrlBtn { background: #16213e; color: #a78bfa; border: 1px solid #a78bfa; }
 </style>
 </head>
 <body>
@@ -83,6 +99,21 @@
   </div>
 
   <div class="output" id="output"></div>
+
+  <hr style="border-color: #333; margin: 2rem 0;" />
+
+  <h1>Lua Script Extractor</h1>
+  <label for="luaInput">Paste Lua script to extract song URL & BPM</label>
+  <textarea id="luaInput" rows="8" placeholder="bpm = 138&#10;loadstring(game:HttpGet(&quot;https://...&quot;))()&#10;loadstring(game:HttpGet(&quot;https://gist.githack.com/.../custom_song.lua&quot;))()"></textarea>
+
+  <div class="actions" style="margin-top: 1rem;">
+    <button id="extractBtn">Extract</button>
+    <button id="copyBpmBtn" style="display:none">Copy BPM</button>
+    <button id="copyUrlBtn" style="display:none">Copy URL</button>
+    <span class="status" id="extractStatus"></span>
+  </div>
+
+  <div id="extractResult" style="display:none; margin-top: 1rem;"></div>
 </div>
 
 <script>
@@ -210,6 +241,51 @@ $('uploadBtn').addEventListener('click', async () => {
     $('uploadBtn').disabled = false;
   }
 });
+
+// Lua Script Extractor
+$('extractBtn').addEventListener('click', () => {
+  const code = $('luaInput').value;
+  if (!code.trim()) return setExtractStatus('Paste a Lua script first', 'error');
+
+  const bpmMatch = code.match(/bpm\s*=\s*(\d+)/i);
+  const urlMatch = code.match(/game:HttpGet\(\s*"(https?:\/\/gist[^"]+)"/i)
+    || code.match(/game:HttpGet\(\s*"(https?:\/\/raw[^"]+)"/i)
+    || code.match(/game:HttpGet\(\s*"(https?:\/\/pastebin[^"]+)"/i)
+    || code.match(/game:HttpGet\(\s*"(https?:\/\/cdn[^"]+)"/i)
+    || code.match(/game:HttpGet\(\s*"(https?:\/\/pastefy[^"]+)"/i);
+
+  // Find the song URL (last HttpGet that isn't the loader)
+  const allUrls = [...code.matchAll(/game:HttpGet\(\s*"(https?:\/\/[^"]+)"/gi)].map(m => m[1]);
+  const songUrl = allUrls.length > 1 ? allUrls[allUrls.length - 1] : (allUrls[0] || null);
+  const detectedBpm = bpmMatch ? bpmMatch[1] : null;
+
+  if (!detectedBpm && !songUrl) {
+    setExtractStatus('Could not detect BPM or URL from script', 'error');
+    $('extractResult').style.display = 'none';
+    return;
+  }
+
+  let html = '';
+  if (detectedBpm) html += `<div class="field"><span class="label">BPM: </span><span class="value" id="bpmValue">${detectedBpm}</span></div>`;
+  if (songUrl) html += `<div class="field"><span class="label">Song URL: </span><span class="value" id="urlValue">${songUrl}</span></div>`;
+  if (allUrls.length > 1) {
+    html += `<div class="field"><span class="label">Loader URL: </span><span class="value">${allUrls[0]}</span></div>`;
+  }
+
+  $('extractResult').innerHTML = html;
+  $('extractResult').style.display = 'block';
+  $('copyBpmBtn').style.display = detectedBpm ? '' : 'none';
+  $('copyUrlBtn').style.display = songUrl ? '' : 'none';
+  $('copyBpmBtn').onclick = () => { navigator.clipboard.writeText(detectedBpm); setExtractStatus('BPM copied!', 'success'); };
+  $('copyUrlBtn').onclick = () => { navigator.clipboard.writeText(songUrl); setExtractStatus('URL copied!', 'success'); };
+  setExtractStatus(`Extracted ${(detectedBpm ? 1 : 0) + (songUrl ? 1 : 0)} field(s)`, 'success');
+});
+
+function setExtractStatus(msg, type) {
+  const s = $('extractStatus');
+  s.textContent = msg;
+  s.className = 'status' + (type ? ' ' + type : '');
+}
 
 function showResult(url, isUpdate) {
   $('output').style.display = 'block';
